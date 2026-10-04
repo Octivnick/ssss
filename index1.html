@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Market Anomaly Scanner</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+<header class="topbar"><div class="brand">Market Anomaly Scanner</div><div id="st" class="status"><i class="dot"></i> offline</div><div class="spacer"></div><div class="topstat">Pairs <b id="pairs">0</b></div><div class="topstat">Session <b id="sess">—</b></div><div class="topstat">Window <b id="topwin">3m</b></div></header>
+<div class="toolbar"><div class="segment" id="win"><button data-w="1">1m</button><button data-w="3">3m</button><button data-w="5">5m</button></div><button class="btn primary" id="refresh">Refresh</button><input class="search" id="q" placeholder="Search pair…"></div>
+<section class="grid3" id="prio"></section>
+<section class="panel"><div class="panelhead"><b>TOP-5 ANOMALIES</b><span>σ + volume + ΔOI ranking</span></div><div class="tablewrap"><table><thead id="head"></thead><tbody id="top"></tbody></table></div></section>
+<section class="panel"><div class="panelhead"><b>ALERT HISTORY</b><span>last 100 alerts</span></div><div class="tablewrap" style="max-height:360px"><table><thead id="head2"></thead><tbody id="hist"></tbody></table></div></section>
+<section class="panel"><details><summary>Scanner settings</summary><div class="settings-body"><div class="settings-grid"><label class="field">Min 24h volume, $M<input id="qv" type="number" min="0" step="5"></label><label class="field">Max spread, bp<input id="sp" type="number" min="0" step=".5"></label><label class="field">Cooldown, min<input id="cd" type="number" min="5" max="15" step="1"></label><label class="field">Priority σ threshold<input id="pz" type="number" min="1" step=".1"></label><label class="field">Apply changes<button class="btn save" id="save">Save settings</button></label></div><div class="session-table"><table><thead><tr><th>Session UTC</th><th>Hours</th><th>Min σ</th><th>Min volume ×</th></tr></thead><tbody id="sessb"></tbody></table></div></div></details></section>
+<div class="footerline"><span>Live: Binance Futures напряму з браузера · потрібен відкритий екран</span><span id="updated">—</span></div>
+</div>
+<script>
+const $=s=>document.querySelector(s),PRIO=['BTCUSDT','ETHUSDT','SOLUSDT'];let S={window:3,min_qv24:5e7,max_spread_bps:5,cooldown_min:10,prio_z_min:2,sessions:{},pairs_total:0},LATEST={},HIST=[];
+const f=(v,d=2,u='')=>v==null?'—':(+v).toFixed(d)+u,sg=v=>v==null?'':v>0?'up':'dn',usd=v=>v==null?'—':'$'+(Math.abs(v)>=1e6?(v/1e6).toFixed(1)+'M':Math.round(v/1e3)+'k'),ago=t=>{const s=Math.max(0,Date.now()/1000-t);return s<90?Math.round(s)+'s':s<5400?Math.round(s/60)+'m':Math.round(s/3600)+'h'};
+const COLS=[['Pair',a=>`<span class="symbolcell">${a.sym.replace('USDT','')}</span>`],['Price',a=>a.px],['σ move',a=>`<span class="${sg(a.z)}">${f(a.z,2,'σ')}</span>`],['Vol',a=>f(a.vr,1,'×')],['ΔOI',a=>`<span class="${sg(a.doi)}">${f(a.doi,2,'%')}</span>`],['Liquidations',a=>a.liq?usd(a.liq):'—'],['Funding / Δ',a=>`${f(a.fund,4,'%')} <span class="${sg(a.dfund)}">${f(a.dfund,4)}</span>`],['Spread',a=>f(a.spread,1,'bp')],['Depth',a=>usd(a.depth)],['Basis B↔W',a=>`<span class="${sg(a.basis)}">${f(a.basis,1,'bp')}</span>`],['Score',a=>`<span class="score">${f(a.score,1)}</span>`],['Signal',a=>`<span class="tag">${a.tag||'—'}</span>`],['Age',a=>ago(a.ts)]];
+const HCOLS=COLS.concat([['Window',a=>a.win+'m'],['+5m',a=>`<span class="${sg(a.ret_5m)}">${f(a.ret_5m,2,'%')}</span>`],['+15m',a=>`<span class="${sg(a.ret_15m)}">${f(a.ret_15m,2,'%')}</span>`]]);
+const head=c=>'<tr>'+c.map(x=>`<th>${x[0]}</th>`).join('')+'</tr>',row=(c,a)=>`<tr class="${a.prio?'priority-row':''}">`+c.map(x=>`<td>${x[1](a)}</td>`).join('')+'</tr>';$('[id=head]').innerHTML=head(COLS);$('[id=head2]').innerHTML=head(HCOLS);
+function sessionName(){const h=new Date().getUTCHours(),e=Object.entries(S.sessions||{}).find(([k,v])=>h>=v.hours[0]&&h<v.hours[1]);return e?e[0].toUpperCase():'—'}function visible(a){return a.win==S.window&&(a.spread==null||a.spread<=S.max_spread_bps)&&Date.now()/1000-a.ts<900}
+function render(){const all=Object.values(LATEST).filter(visible),q=$('#q').value.trim().toUpperCase(),top=all.filter(a=>!a.prio&&(!q||a.sym.includes(q))).sort((a,b)=>b.score-a.score).slice(0,5);$('#top').innerHTML=top.length?top.map(a=>row(COLS,a)).join(''):`<tr><td colspan="13" class="empty">No active anomalies in ${S.window}m window.</td></tr>`;
+$('#prio').innerHTML=PRIO.map(sym=>{const a=LATEST[sym],hot=a&&visible(a);return `<div class="priority ${hot?'hot':''}"><div class="phead"><span class="symbol">${sym.replace('USDT','')}</span>${hot?'<span class="badge">PRIORITY</span>':''}</div>${hot?`<div class="pmain"><span class="zbig ${sg(a.z)}">${f(a.z,2,'σ')}</span><span>${a.px}</span><span class="${sg(a.z)}">${a.z>0?'↑':'↓'}</span></div><div class="meta">VOL ${f(a.vr,1,'×')} · OI ${f(a.doi,2,'%')} · LIQ ${usd(a.liq)} · ${ago(a.ts)} ago</div>`:`<div class="mu">No active anomaly · threshold ${S.prio_z_min}σ</div>`}</div>`}).join('');
+const hist=HIST.filter(a=>!q||a.sym.includes(q)).slice(0,100);$('#hist').innerHTML=hist.length?hist.map(a=>row(HCOLS,a)).join(''):`<tr><td colspan="16" class="empty">No history.</td></tr>`;$('#sess').textContent=sessionName();$('#topwin').textContent=S.window+'m';$('#updated').textContent='Updated '+new Date().toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+function fillForm(){document.querySelectorAll('#win button').forEach(b=>b.classList.toggle('active',+b.dataset.w===S.window));$('#qv').value=(S.min_qv24||0)/1e6;$('#sp').value=S.max_spread_bps;$('#cd').value=S.cooldown_min;$('#pz').value=S.prio_z_min;$('#pairs').textContent=S.pairs_total||0;$('#sessb').innerHTML=Object.entries(S.sessions||{}).map(([k,v])=>`<tr><td>${k.toUpperCase()}</td><td>${v.hours[0]}–${v.hours[1]}</td><td><input type="number" step=".1" data-s="${k}" data-f="z_min" value="${v.z_min}"></td><td><input type="number" step=".5" data-s="${k}" data-f="vr_min" value="${v.vr_min}"></td></tr>`).join('')}
+function save(extra={}){const sessions=JSON.parse(JSON.stringify(S.sessions||{}));document.querySelectorAll('#sessb input').forEach(i=>{if(sessions[i.dataset.s])sessions[i.dataset.s][i.dataset.f]=+i.value});const cd=Math.min(15,Math.max(5,+$('#cd').value||10));S={...S,min_qv24:+$('#qv').value*1e6,max_spread_bps:+$('#sp').value,cooldown_min:cd,prio_z_min:+$('#pz').value,sessions,...extra};LS.set('scanner.S',S);fillForm();render()}
+$('#win').onclick=e=>{const w=e.target.dataset.w;if(w){S.window=+w;fillForm();save({window:+w})}};$('#save').onclick=()=>save();$('#q').oninput=render;$('#refresh').onclick=()=>render();function setOnline(on){$('#st').innerHTML=`<i class="dot ${on?'on':''}"></i> ${on?'online':'reconnecting…'}`}
+
+/* ---- LIVE: Binance Futures напряму з браузера (REST + WebSocket), без сервера ---- */
+const FAPI='https://fapi.binance.com/fapi/v1',WSB='wss://fstream.binance.com/stream?streams=',WEEXU='https://api-contract.weex.com/capi/v3/market/ticker/bookTicker';
+const N=Math.min(400,+new URLSearchParams(location.search).get('n')||150),PS=new Set(PRIO);
+const BARS={},BOOK={},QV={},FUND={},OI={},LASTA={},WEEX={},CACHE={};let LIQ=[],SYMS=[],ID=0,LASTMSG=0,READY=false,STX='старт…';
+const sleep=ms=>new Promise(r=>setTimeout(r,ms)),LS={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const jget=async(p,q)=>{const r=await fetch(FAPI+p+(q?'?'+new URLSearchParams(q):''));if(!r.ok)throw new Error(p+' '+r.status);return r.json()};
+S={...S,sessions:{asia:{hours:[0,8],z_min:2.5,vr_min:3},eu:{hours:[8,14],z_min:2.5,vr_min:3},us:{hours:[14,22],z_min:2.5,vr_min:3.5},dead:{hours:[22,24],z_min:3,vr_min:5}},...(LS.get('scanner.S')||{}),pairs_total:0};
+HIST=LS.get('scanner.H')||[];HIST.forEach(a=>{ID=Math.max(ID,a.id||0);if(Date.now()/1e3-a.ts<900&&(!LATEST[a.sym]||LATEST[a.sym].ts<a.ts))LATEST[a.sym]=a});
+const persist=()=>LS.set('scanner.H',HIST.slice(0,300));
+function thr(s){const h=new Date().getUTCHours(),x=Object.values(S.sessions).find(v=>h>=v.hours[0]&&h<v.hours[1])||{z_min:2.5,vr_min:3};return[PS.has(s)?Math.min(x.z_min,S.prio_z_min):x.z_min,x.vr_min]}
+function onAgg(d){const s=d.s,p=+d.p,q=+d.q,m=Math.floor(d.T/6e4);let b=BARS[s];if(!b)b=BARS[s]=[];const x=b[b.length-1];if(x&&x[0]===m){if(p>x[2])x[2]=p;if(p<x[3])x[3]=p;x[4]=p;x[5]+=p*q}else if(!x||x[0]<m){b.push([m,p,p,p,p,p*q]);if(b.length>1440)b.shift()}}
+function onMsg(e){LASTMSG=Date.now();const m=JSON.parse(e.data),st=m.stream,d=m.data;if(st.endsWith('@aggTrade'))onAgg(d);else if(st==='!forceOrder@arr'){const o=d.o;LIQ.push([o.T,o.s,+o.q*(+o.ap||+o.p)]);if(LIQ.length>3000)LIQ.shift()}}
+function wsLoop(streams){const open=()=>{const w=new WebSocket(WSB+streams.join('/'));w.onmessage=onMsg;w.onclose=()=>setTimeout(open,2000);w.onerror=()=>w.close()};open()}
+async function seed(){let n=0;const q=[...SYMS],run=async()=>{while(q.length){const s=q.shift();try{const k=await jget('/klines',{symbol:s,interval:'1m',limit:480}),hh=k.slice(0,-1).map(x=>[Math.floor(x[0]/6e4),+x[1],+x[2],+x[3],+x[4],+x[7]]),last=hh.length?hh[hh.length-1][0]:0;BARS[s]=hh.concat((BARS[s]||[]).filter(b=>b[0]>last))}catch(e){}STX='історія '+(++n)+'/'+SYMS.length;await sleep(100)}};await Promise.all([run(),run(),run(),run()])}
+async function loop(fn,ms){for(;;){try{await fn()}catch(e){}await sleep(ms)}}
+const pBook=()=>jget('/ticker/bookTicker').then(a=>a.forEach(x=>{const b=+x.bidPrice,c=+x.askPrice;if(b>0&&c>0)BOOK[x.symbol]=(c-b)/((c+b)/2)*1e4}));
+const pMark=()=>jget('/premiumIndex').then(a=>{const n=Date.now()/1e3;a.forEach(x=>{const i=+x.indexPrice;if(i>0){const P=(+x.markPrice-i)/i,e=(P+Math.max(-5e-4,Math.min(5e-4,1e-4-P)))*100,f=FUND[x.symbol]||(FUND[x.symbol]={last:null,est:[]});f.last=x.lastFundingRate===''?null:+x.lastFundingRate*100;f.est.push([n,e]);if(f.est.length>120)f.est.shift()}})});
+const p24=()=>jget('/ticker/24hr').then(a=>a.forEach(x=>{if(x.symbol.endsWith('USDT')&&!x.symbol.includes('_'))QV[x.symbol]=+x.quoteVolume}));
+async function pOI(){for(const s of SYMS){try{const j=await jget('/openInterest',{symbol:s}),h=OI[s]||(OI[s]=[]);h.push([Date.now()/1e3,+j.openInterest]);if(h.length>40)h.shift()}catch(e){}await sleep(250)}}
+const pWeex=()=>fetch(WEEXU).then(r=>r.json()).then(j=>(Array.isArray(j)?j:j.data||[]).forEach(x=>{const b=+x.bidPrice,a=+x.askPrice;if(b>0&&a>0)WEEX[String(x.symbol).toUpperCase()]=(a+b)/2}));
+function stats(s,b,i,now){const c=CACHE[s];if(c&&now-c.t<60)return c;const hh=b.slice(Math.max(0,i-360),i+1),r=[];for(let k=1;k<hh.length;k++)r.push(Math.log(hh[k][4]/hh[k-1][4]));const m=r.reduce((a,x)=>a+x,0)/r.length,sg=Math.sqrt(r.reduce((a,x)=>a+(x-m)**2,0)/r.length),q=b.slice(0,i+1).map(x=>x[5]).sort((a,c)=>a-c);return CACHE[s]={t:now,sg,base:q[q.length>>1]}}
+function metrics(s,now,W){const b=BARS[s];if(!b||b.length<120||now/60-b[b.length-1][0]>2)return null;const cur=Math.floor(now/60);let i=b.length-1;while(i>=0&&b[i][0]>cur-W)i--;if(i<99||b[i][0]<cur-W-3)return null;const px=b[b.length-1][4],ret=Math.log(px/b[i][4]),st=stats(s,b,i,now);if(!st.sg||!(st.base>0))return null;const el=Math.max(W-1+(now%60)/60,W*.5),z=ret/(st.sg*Math.sqrt(el));if(Math.abs(z)<1)return null;let v=0;for(let k=i+1;k<b.length;k++)v+=b[k][5];return[z,v/(st.base*el),px]}
+function oiCh(s,now,lb=300){const h=OI[s];if(!h||h.length<2)return null;let o=h[0];for(const x of h)if(Math.abs(x[0]-(now-lb))<Math.abs(o[0]-(now-lb)))o=x;return now-o[0]<lb*.6?null:(h[h.length-1][1]/o[1]-1)*100}
+function quick(s,now,W){const m=metrics(s,now,W);if(!m)return null;const[z,vr,px]=m,[zm,vm]=thr(s),sp=BOOK[s];if(Math.abs(z)<zm||vr<vm||sp==null||sp>S.max_spread_bps||(QV[s]||0)<S.min_qv24)return null;
+let sc=Math.min(Math.abs(z)/3,2)+Math.min(vr/3,2),doi=oiCh(s,now),tag='OI n/a',up=z>0;
+if(doi!=null){sc+=Math.min(Math.abs(doi)/.5,2);tag=doi>.3?(up?'нові лонги':'нові шорти'):doi<-.3?(up?'закриття шортів':'закриття лонгів'):'OI flat'}
+const t=now*1e3;let liq=0;for(const l of LIQ)if(l[1]===s&&t-l[0]<6e4)liq+=l[2];if(liq>1e5)sc++;
+const F=FUND[s];let fund=null,dfund=null;if(F){fund=F.last;const e=F.est;if(e.length){let o=e[0];for(const x of e)if(Math.abs(x[0]-(now-300))<Math.abs(o[0]-(now-300)))o=x;if(now-o[0]>=180)dfund=e[e.length-1][1]-o[1]}}
+const w=WEEX[s],R=(v,n)=>v==null?null:+v.toFixed(n);
+return{id:0,ts:Math.floor(now),sym:s,win:W,px,z:R(z,2),vr:R(vr,1),doi:R(doi,2),liq:Math.round(liq),fund:R(fund,4),dfund:R(dfund,4),spread:R(sp,1),depth:null,basis:w?R((px-w)/px*1e4,1):null,score:R(sc,1),tag,prio:+PS.has(s),ret_5m:null,ret_15m:null}}
+async function depthOf(s,px){try{const d=await jget('/depth',{symbol:s,limit:100}),lo=px*.995,hi=px*1.005;let t=0;d.bids.forEach(([p,q])=>{if(+p>=lo)t+=p*q});d.asks.forEach(([p,q])=>{if(+p<=hi)t+=p*q});return Math.round(t)}catch(e){return null}}
+function track(a){[[3e5,'ret_5m'],[9e5,'ret_15m']].forEach(([ms,k])=>setTimeout(()=>{const b=BARS[a.sym];if(b){a[k]=+(Math.sign(a.z)*(b[b.length-1][4]/a.px-1)*100).toFixed(3);persist();render()}},ms))}
+async function scanLoop(){for(;;){await sleep(3000);const now=Date.now()/1e3,W=S.window,cd=S.cooldown_min*60,res=[];for(const s of SYMS){if(now-(LASTA[s]||0)<=cd)continue;const r=quick(s,now,W);if(r)res.push(r)}res.sort((a,b)=>b.score-a.score);for(const a of res.slice(0,5)){LASTA[a.sym]=now;a.id=++ID;a.depth=await depthOf(a.sym,a.px);LATEST[a.sym]=a;HIST.unshift(a);HIST.length=Math.min(HIST.length,300);track(a);persist();render()}}}
+async function boot(){try{await p24()}catch(e){STX='Binance недоступний: '+e.message+' (VPN/регіон?)';return}
+SYMS=Object.keys(QV).sort((a,b)=>QV[b]-QV[a]).slice(0,N);S.pairs_total=SYMS.length;fillForm();
+const agg=SYMS.map(s=>s.toLowerCase()+'@aggTrade');for(let i=0;i<agg.length;i+=100)wsLoop(agg.slice(i,i+100));wsLoop(['!forceOrder@arr']);
+loop(pBook,2000);loop(pMark,5000);loop(p24,3e5);loop(pOI,0);loop(pWeex,5000);await seed();READY=true;STX='';scanLoop()}
+setInterval(()=>{const live=Date.now()-LASTMSG<15000;$('#st').innerHTML=`<i class="dot ${READY&&live?'on':''}"></i> ${STX||(live?'live':'немає даних')}`},1500);
+(async()=>{try{await navigator.wakeLock.request('screen')}catch(e){}})();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){try{navigator.wakeLock.request('screen')}catch(e){}render()}});
+fillForm();render();boot();setInterval(render,15000);
+</script>
+</body></html>
